@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/types"
+	"reflect"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -74,6 +75,9 @@ func (p *parser) NeedResourceFor(pkg *loader.Package, groupKind schema.GroupKind
 	if err != nil {
 		return err
 	}
+	if object := pkg.Types.Scope().Lookup(typeIdent.Name); object != nil {
+		annotatePathKinds(metrics, object.Type())
+	}
 
 	// Initialize the Resource object.
 	resource := config.Resource{
@@ -99,6 +103,117 @@ func (p *parser) NeedResourceFor(pkg *loader.Package, groupKind schema.GroupKind
 
 	p.CustomResourceStates[typeIdent] = &resource
 	return nil
+}
+
+func annotatePathKinds(generators []config.Generator, root types.Type) {
+	for i := range generators {
+		var meta *config.MetricMeta
+		switch generators[i].Each.Type {
+		case config.MetricTypeGauge:
+			meta = &generators[i].Each.Gauge.MetricMeta
+		case config.MetricTypeInfo:
+			meta = &generators[i].Each.Info.MetricMeta
+		case config.MetricTypeStateSet:
+			meta = &generators[i].Each.StateSet.MetricMeta
+		}
+		if meta != nil {
+			meta.PathKind = goPathKind(root, meta.Path)
+			if generators[i].Each.Type == config.MetricTypeGauge {
+				valuePath := append(append([]string{}, meta.Path...), generators[i].Each.Gauge.ValueFrom...)
+				if isTimestampType(goTypeAtJSONPath(root, valuePath)) {
+					meta.ValueKind = config.ValueKindTimestamp
+				}
+			}
+		}
+	}
+}
+
+func goPathKind(root types.Type, path []string) config.PathKind {
+	current := goTypeAtJSONPath(root, path)
+	if current == nil {
+		return config.PathKindScalar
+	}
+	current = dereferenceType(current)
+	switch current.Underlying().(type) {
+	case *types.Slice, *types.Array:
+		return config.PathKindArray
+	case *types.Struct, *types.Map:
+		return config.PathKindObject
+	default:
+		return config.PathKindScalar
+	}
+}
+
+func goTypeAtJSONPath(root types.Type, path []string) types.Type {
+	current := root
+	for _, element := range path {
+		current = dereferenceType(current)
+		switch typed := current.Underlying().(type) {
+		case *types.Slice:
+			current = typed.Elem()
+			if strings.HasPrefix(element, "[") {
+				continue
+			}
+		case *types.Array:
+			current = typed.Elem()
+			if strings.HasPrefix(element, "[") {
+				continue
+			}
+		case *types.Map:
+			current = typed.Elem()
+		}
+
+		fieldType, ok := jsonFieldType(dereferenceType(current), element)
+		if !ok {
+			return nil
+		}
+		current = fieldType
+	}
+	return current
+}
+
+func isTimestampType(typ types.Type) bool {
+	if typ == nil {
+		return false
+	}
+	typ = dereferenceType(typ)
+	named, ok := typ.(*types.Named)
+	if !ok || named.Obj().Pkg() == nil {
+		return false
+	}
+	return named.Obj().Pkg().Path() == "k8s.io/apimachinery/pkg/apis/meta/v1" &&
+		(named.Obj().Name() == "Time" || named.Obj().Name() == "MicroTime")
+}
+
+func dereferenceType(typ types.Type) types.Type {
+	for {
+		pointer, ok := typ.(*types.Pointer)
+		if !ok {
+			return typ
+		}
+		typ = pointer.Elem()
+	}
+}
+
+func jsonFieldType(typ types.Type, name string) (types.Type, bool) {
+	structure, ok := typ.Underlying().(*types.Struct)
+	if !ok {
+		return nil, false
+	}
+	for i := range structure.NumFields() {
+		field := structure.Field(i)
+		tag := reflect.StructTag(structure.Tag(i)).Get("json")
+		jsonName := strings.Split(tag, ",")[0]
+		if jsonName == name || (jsonName == "" && field.Name() == name) {
+			return field.Type(), true
+		}
+		if field.Embedded() && (jsonName == "" || strings.Contains(tag, "inline")) {
+			if nested, found := jsonFieldType(dereferenceType(field.Type()), name); found {
+				return nested, true
+			}
+		}
+	}
+	return nil, false
 }
 
 type generatorRequester interface {

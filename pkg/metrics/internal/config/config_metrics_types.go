@@ -22,7 +22,29 @@ type MetricMeta struct {
 	LabelsFromPath map[string][]string `yaml:"labelsFromPath,omitempty" json:"labelsFromPath,omitempty"`
 	// Path is the path to to generate metric(s) for.
 	Path []string `yaml:"path" json:"path"`
+	// PathKind records the shape of Path for target-specific renderers. It is
+	// derived from the Go type and is not part of kube-state-metrics' API.
+	PathKind PathKind `yaml:"-" json:"-"`
+	// ValueKind records special value conversion requirements.
+	ValueKind ValueKind `yaml:"-" json:"-"`
 }
+
+// PathKind describes the value selected by a metric path.
+type PathKind string
+
+const (
+	PathKindScalar PathKind = "scalar"
+	PathKindObject PathKind = "object"
+	PathKindArray  PathKind = "array"
+)
+
+// ValueKind describes special serialization of a metric value.
+type ValueKind string
+
+const (
+	ValueKindDefault   ValueKind = ""
+	ValueKindTimestamp ValueKind = "timestamp"
+)
 
 // MetricGauge targets a Path that may be a single value, array, or object. Arrays and objects will generate a metric per element.
 // Ref: https://github.com/OpenObservability/OpenMetrics/blob/main/specification/OpenMetrics.md#gauge

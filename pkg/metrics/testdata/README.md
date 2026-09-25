@@ -23,6 +23,20 @@ go generate ./pkg/metrics/testdata/
 
 ## Example files: metrics.yaml, rbac.yaml and example-metrics.txt
 
+The same source markers can instead generate a resource-state-metrics
+`ResourceMetricsMonitor` that uses its CEL resolver:
+
+```sh
+go run ./cmd/controller-gen \
+	'+metrics:target=resource-state-metrics,name=foo-metrics,namespace=default' \
+    paths=./pkg/metrics/testdata \
+    output:dir=./pkg/metrics/testdata
+```
+
+This writes `resource-metrics-monitor.yaml` and an `rbac.yaml` carrying the
+resource-state-metrics aggregation label. The default target remains
+`kube-state-metrics`.
+
 There is also an example CR ([example-foo.yaml](example-foo.yaml)) and resulting example metrics ([example-metrics.txt](example-metrics.txt)).
 
 The example metrics file got created by:
